@@ -8,15 +8,19 @@ const store = new Map(); // key -> { value, expires }
  * @param {string} key
  * @param {number} ttlMs   time-to-live in milliseconds
  * @param {Function: Promise<any>} producer  called on miss
+ * @param {Function: any => boolean} shouldCache  only store when true (default: always)
  */
-async function cached(key, ttlMs, producer) {
+async function cached(key, ttlMs, producer, shouldCache = () => true) {
     const hit = store.get(key);
     const now = Date.now();
     if (hit && hit.expires > now) {
         return hit.value;
     }
     const value = await producer();
-    store.set(key, { value, expires: now + ttlMs });
+    // Don't pollute the cache with empty/failed results so a retry can recompute.
+    if (shouldCache(value)) {
+        store.set(key, { value, expires: now + ttlMs });
+    }
     return value;
 }
 

@@ -38,6 +38,20 @@ async function getStream(type, id) {
     const absEpisode = parts.slice(2).join(":"); // absolute episode number
     if (!slug || !/^\d+$/.test(absEpisode)) return { streams: [] };
 
+    // Cache successful stream results for ~10 min. The tokvoy signed URLs are
+    // IP-bound and valid 12 min, so a cached result is still playable shortly.
+    // This makes Stremio's "select stream"→"play" two-step resilient to tokvoy's
+    // per-IP rate limits (the second click reuses the first extraction).
+    // Only cache non-empty results, so a rate-limited failure can be retried.
+    return cached(
+        `streams:${slug}:${absEpisode}`,
+        10 * 60 * 1000,
+        () => resolveStreams(slug, absEpisode),
+        (result) => result && result.streams && result.streams.length > 0
+    );
+}
+
+async function resolveStreams(slug, absEpisode) {
     // Fetch the episode page (cached briefly so repeated stream clicks are fast).
     const episodeUrl = `${BASE_URL}/${slug}-episode-${absEpisode}/`;
     const html = await cached(
@@ -93,15 +107,9 @@ async function getStream(type, id) {
         }
     }
 
-    if (!streams.length) {
-        // Helpful diagnostic surfaced in Stremio's stream list.
-        streams.push({
-            name: "No sources",
-            title: "Turkish123: no stream could be resolved for this episode",
-            url: "about:blank",
-            behaviorHints: { notWebReady: true }
-        });
-    }
+    // Returning an empty array (rather than a placeholder URL) lets Stremio
+    // show "no streams available" cleanly. A fake URL like "about:blank" crashes
+    // TV players (ExoPlayer chokes on the non-http protocol).
 
     return { streams };
 }
