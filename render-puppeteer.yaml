@@ -1,0 +1,27 @@
+# Full deployment — WITH Chrome for the voe.sx / vidmoly sources.
+# These hosts hide their stream URLs behind obfuscated player JS or Cloudflare
+# challenges, so a headless browser is used to capture the resolved stream.
+# Requires a plan with enough memory for Chromium.
+services:
+  - type: web
+    name: turkish123-stremio-plugin-puppeteer
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: |
+      npm install &&
+      npx puppeteer browsers install chrome
+    startCommand: npm start
+    healthCheckPath: /manifest.json
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: USE_PUPPETEER
+        value: "true"
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+    disk:
+      name: chrome-cache
+      mountPath: /opt/render/project/.cache
+      sizeGB: 1

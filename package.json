@@ -1,0 +1,25 @@
+{
+  "name": "turkish123-stremio-plugin",
+  "version": "1.0.0",
+  "description": "Stremio addon for streaming Turkish series with English subtitles from Turkish123",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "probe": "node scripts/probe.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "oman_online_stremio_plugin": "file:../oman_online_stremio_plugin",
+    "stremio-addon-sdk": "^1.6.10"
+  },
+  "optionalDependencies": {
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

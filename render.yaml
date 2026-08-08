@@ -1,0 +1,17 @@
+# Lightweight deployment — NO Chrome/Puppeteer.
+# The tokvoy (engifuosi) primary source works with pure axios, so the addon is
+# fully functional on the free tier. voe.sx / vidmoly sources are skipped
+# (they need a headless browser — use render-puppeteer.yaml for those).
+services:
+  - type: web
+    name: turkish123-stremio-plugin
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /manifest.json
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
