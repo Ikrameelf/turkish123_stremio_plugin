@@ -1,99 +1,97 @@
 const axios = require("axios");
 const { cached } = require("./cache");
-const channels = require("../youtube-channels.json");
+const { fetchSeriesList } = require("../catalog");
+const { getShowInfo } = require("./tmdb");
 
 const API = "https://www.googleapis.com/youtube/v3";
 const KEY = process.env.YOUTUBE_API_KEY;
-const TTL = 6 * 60 * 60 * 1000; // 6 h (économise le quota)
-const MAX_PAGES = 20; // 20 x 50 = 1000 vidéos max par chaîne
+const TTL = 12 * 60 * 60 * 1000; // 12 h (une recherche coûte 100 unités de quota)
 
-// minuscules + sans accents (ş->s, ğ->g, ı->i...)
+// Chaînes officielles toujours acceptées, en plus de celles trouvées via TMDB.
+// Tu peux en ajouter dans Render : YOUTUBE_EXTRA_CHANNELS="Nom 1,Nom 2"
+const DEFAULT_CHANNELS = [
+    "show tv", "star tv", "atv", "kanal d", "trt 1", "trt",
+    "now", "tv8", "kanal 7", "fox"
+];
+
+// minuscules, sans accents, ponctuation -> espaces
 const norm = (s) =>
     (s || "")
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/ı/g, "i")
-        .toLowerCase();
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
 
-async function yt(path, params) {
-    const { data } = await axios.get(API + path, {
-        params: { key: KEY, ...params },
+function decode(s) {
+    return (s || "")
+        .replace(/&amp;/g, "&")
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"');
+}
+
+async function search(q) {
+    const { data } = await axios.get(API + "/search", {
+        params: { key: KEY, part: "snippet", q, type: "video", maxResults: 15 },
         timeout: 10000
     });
-    return data;
+    return (data.items || []).map((it) => ({
+        id: it.id?.videoId,
+        title: decode(it.snippet?.title),
+        channel: it.snippet?.channelTitle || ""
+    }));
 }
 
-// Trouve la playlist qui contient toutes les vidéos de la chaîne
-async function getPlaylistId(cfg) {
-    if (cfg.playlistId) return cfg.playlistId;
-    if (cfg.channelId) return "UU" + cfg.channelId.slice(2);
-    if (cfg.handle) {
-        const d = await yt("/channels", {
-            part: "contentDetails",
-            forHandle: cfg.handle
-        });
-        return d.items?.[0]?.contentDetails?.relatedPlaylists?.uploads || null;
-    }
-    return null;
-}
-
-async function listVideos(playlistId) {
-    return cached(`yt-list:${playlistId}`, TTL, async () => {
-        const out = [];
-        let pageToken;
-        for (let i = 0; i < MAX_PAGES; i++) {
-            const d = await yt("/playlistItems", {
-                part: "snippet",
-                playlistId,
-                maxResults: 50,
-                pageToken
-            });
-            for (const it of d.items || []) {
-                const s = it.snippet || {};
-                const id = s.resourceId?.videoId;
-                if (id && s.title !== "Private video" && s.title !== "Deleted video") {
-                    out.push({ id, title: s.title });
-                }
-            }
-            pageToken = d.nextPageToken;
-            if (!pageToken) break;
-        }
-        return out;
-    });
-}
-
-// Extrait le numéro d'épisode d'un titre ("150. Bölüm", "Episode 150"...)
+// Numéro d'épisode dans le titre ("150. Bölüm", "Episode 150"...)
 function episodeNumber(title) {
     const n = norm(title);
-    let m = n.match(/\b(\d{1,4})\s*\.?\s*(bolum|episode|ep)\b/);
+    let m = n.match(/\b(\d{1,4}) (bolum|episode|ep)\b/);
     if (m) return parseInt(m[1], 10);
-    m = n.match(/\b(bolum|episode|ep)\s*\.?\s*(\d{1,4})\b/);
+    m = n.match(/\b(bolum|episode|ep) (\d{1,4})\b/);
     if (m) return parseInt(m[2], 10);
     return null;
 }
 
+// La chaîne est-elle dans la liste officielle ? (comparaison par mots entiers)
+function isOfficial(channelTitle, names) {
+    const c = ` ${norm(channelTitle)} `;
+    return names.some((n) => n && c.includes(` ${norm(n)} `));
+}
+
 async function getYoutubeStreams(slug, absEpisode) {
-    const cfg = channels[slug];
-    if (!KEY || !cfg) return [];
+    if (!KEY) return [];
 
-    const playlistId = await cached(`yt-pl:${slug}`, TTL, () => getPlaylistId(cfg));
-    if (!playlistId) return [];
+    const list = await fetchSeriesList().catch(() => []);
+    const siteName = list.find((s) => s.slug === slug)?.name || slug.replace(/-/g, " ");
+    const cleanSite = siteName.replace(/\(.*?\)/g, "").trim();
 
-    const videos = await listVideos(playlistId);
-    const match = norm(cfg.match || "");
+    const info = await getShowInfo(cleanSite).catch(() => null);
+    const originalName = info?.originalName || cleanSite;
+
+    const extra = (process.env.YOUTUBE_EXTRA_CHANNELS || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+    const officialNames = [...DEFAULT_CHANNELS, ...(info?.companies || []), ...extra];
+
     const wanted = parseInt(absEpisode, 10);
+    const q = `${originalName} ${wanted}. Bölüm`;
+    const results = await cached(`yt-search:${q}`, TTL, () => search(q));
 
-    return videos
+    const keys = [norm(originalName), norm(cleanSite)].filter(Boolean);
+
+    return results
         .filter((v) => {
+            if (!v.id) return false;
             const t = norm(v.title);
-            if (match && !t.includes(match)) return false;
-            if (/fragman|trailer|teaser|promo/.test(t)) return false;
-            return episodeNumber(v.title) === wanted;
+            if (/fragman|trailer|teaser|promo|ozet|best of/.test(t)) return false;
+            if (!keys.some((k) => t.includes(k))) return false;
+            if (episodeNumber(v.title) !== wanted) return false;
+            return isOfficial(v.channel, officialNames);
         })
-        .slice(0, 3)
+        .slice(0, 2)
         .map((v) => ({
             name: "YouTube",
-            title: `▶ YouTube officiel\n${v.title}`,
+            title: `▶ YouTube officiel\n${v.title}\n(${v.channel})`,
             ytId: v.id
         }));
 }
