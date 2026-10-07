@@ -32,18 +32,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return await getStream(type, id);
 });
 
-// Proxy route.
-//
-// Two jobs:
-//   1. For HLS playlists (.m3u8): buffer the response, rewrite every segment
-//      line back through this proxy, force the HLS content-type. This is what
-//      lets a hotlink-protected CDN play inside Stremio's web player.
-//   2. For media segments / direct .mp4: pipe straight through (low memory).
-//
-// Query params:
-//   url     - the absolute URL to fetch (required)
-//   referer - the Referer header to send to the CDN (optional)
-//   cookie  - cookies to forward (optional)
+// Proxy : réécrit les playlists HLS et relaie les segments / mp4
 app.get("/proxy", async (req, res) => {
     const targetUrl = req.query.url;
     if (!targetUrl) return res.status(400).send("Missing url param");
@@ -102,7 +91,6 @@ app.get("/proxy", async (req, res) => {
                 if (!res.headersSent) res.status(500).send("Stream error");
             });
         } else {
-            // Media segment or direct mp4: pipe through.
             res.setHeader("Content-Type", contentType || "application/octet-stream");
             response.data.pipe(res);
             response.data.on("error", () => {});
@@ -111,4 +99,46 @@ app.get("/proxy", async (req, res) => {
         if (e.response) {
             if (!res.headersSent) res.sendStatus(e.response.status);
         } else {
-            if (!
+            if (!res.headersSent) res.status(500).send(e.message);
+        }
+    }
+});
+
+// Diagnostic 1 : /debug/youtube/<slug>/<numéro d'épisode>
+app.get("/debug/youtube/:slug/:ep", async (req, res) => {
+    res.json(await debugYoutube(req.params.slug, req.params.ep));
+});
+
+// Diagnostic 2 : /debug/streams/<slug>/<numéro d'épisode>
+app.get("/debug/streams/:slug/:ep", async (req, res) => {
+    const { slug, ep } = req.params;
+    const out = {};
+
+    try {
+        const yt = await getYoutubeStreams(slug, ep);
+        out.youtubeCount = yt.length;
+        out.youtube = yt;
+    } catch (e) {
+        out.youtubeError = e.response?.data?.error?.message || e.message;
+    }
+
+    try {
+        const all = await getStream("series", `turkish123:${slug}:${ep}`);
+        out.totalCount = all.streams.length;
+        out.names = all.streams.map((s) => s.name);
+    } catch (e) {
+        out.totalError = e.message;
+    }
+
+    res.json(out);
+});
+
+const addonInterface = builder.getInterface();
+const addonRouter = getRouter(addonInterface);
+app.use("/", addonRouter);
+
+const PORT = process.env.PORT || 7000;
+app.listen(PORT, () => {
+    console.log(`Turkish123 addon running on http://localhost:${PORT}`);
+    console.log(`Manifest: http://localhost:${PORT}/manifest.json`);
+});
