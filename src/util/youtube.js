@@ -59,12 +59,8 @@ function isOfficial(channelTitle, names) {
     return names.some((n) => n && c.includes(` ${norm(n)} `));
 }
 
-async function getYoutubeStreams(slug, absEpisode) {
-    if (!KEY) {
-        console.log("YouTube: YOUTUBE_API_KEY manquante");
-        return [];
-    }
-
+// Prépare la requête : nom original (TMDB), chaînes officielles, texte cherché
+async function prepare(slug, absEpisode) {
     const list = await fetchSeriesList().catch(() => []);
     const siteName = list.find((s) => s.slug === slug)?.name || slug.replace(/-/g, " ");
     const cleanSite = siteName.replace(/\(.*?\)/g, "").trim();
@@ -78,25 +74,34 @@ async function getYoutubeStreams(slug, absEpisode) {
 
     const wanted = parseInt(absEpisode, 10);
     const q = `${originalName} ${wanted}. Bölüm`;
-    const results = await cached(`yt-search:${q}`, TTL, () => search(q));
+    const keys = [norm(originalName), norm(cleanSite)].filter(Boolean);
 
-    // --- Logs de diagnostic ---
-    console.log("YT query:", q, "| officiel:", officialNames.join(", "));
+    return { cleanSite, originalName, officialNames, wanted, q, keys, tmdbFound: !!info };
+}
+
+async function getYoutubeStreams(slug, absEpisode) {
+    if (!KEY) {
+        console.log("YouTube: YOUTUBE_API_KEY manquante");
+        return [];
+    }
+
+    const p = await prepare(slug, absEpisode);
+    const results = await cached(`yt-search:${p.q}`, TTL, () => search(p.q));
+
+    console.log("YT query:", p.q, "| officiel:", p.officialNames.join(", "));
     console.log(
         "YT results:\n" +
         (results.map((v) => `${v.channel} | ${v.title}`).join("\n") || "(aucun résultat)")
     );
-
-    const keys = [norm(originalName), norm(cleanSite)].filter(Boolean);
 
     return results
         .filter((v) => {
             if (!v.id) return false;
             const t = norm(v.title);
             if (/fragman|trailer|teaser|promo|ozet|best of/.test(t)) return false;
-            if (!keys.some((k) => t.includes(k))) return false;
-            if (episodeNumber(v.title) !== wanted) return false;
-            return isOfficial(v.channel, officialNames);
+            if (!p.keys.some((k) => t.includes(k))) return false;
+            if (episodeNumber(v.title) !== p.wanted) return false;
+            return isOfficial(v.channel, p.officialNames);
         })
         .slice(0, 2)
         .map((v) => ({
@@ -106,4 +111,35 @@ async function getYoutubeStreams(slug, absEpisode) {
         }));
 }
 
-module.exports = { getYoutubeStreams };
+// Diagnostic : affiche tout ce qui se passe, vidéo par vidéo
+async function debugYoutube(slug, absEpisode) {
+    const out = {
+        youtubeKeyPresent: !!KEY,
+        tmdbKeyPresent: !!process.env.TMDB_API_KEY
+    };
+    try {
+        const p = await prepare(slug, absEpisode);
+        out.tmdbFound = p.tmdbFound;
+        out.originalName = p.originalName;
+        out.query = p.q;
+        out.officialChannels = p.officialNames;
+
+        const results = await search(p.q);
+        out.resultCount = results.length;
+        out.results = results.map((v) => {
+            const t = norm(v.title);
+            return {
+                channel: v.channel,
+                title: v.title,
+                seriesNameInTitle: p.keys.some((k) => t.includes(k)),
+                episodeNumberFound: episodeNumber(v.title),
+                officialChannel: isOfficial(v.channel, p.officialNames)
+            };
+        });
+    } catch (e) {
+        out.error = e.response?.data?.error?.message || e.message;
+    }
+    return out;
+}
+
+module.exports = { getYoutubeStreams, debugYoutube };
