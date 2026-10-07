@@ -1,6 +1,7 @@
 const cheerio = require("cheerio");
 const { get } = require("./util/http");
 const { cached } = require("./util/cache");
+const { enrichMeta } = require("./util/tmdb");
 
 const BASE_URL = "https://turkish123.pro";
 const ID_PREFIX = "turkish123";
@@ -212,6 +213,14 @@ async function getMeta(type, id) {
             director,
             videos
         };
+
+        // Enrichissement TMDB (si la clé est absente ou en cas d'erreur,
+        // on garde simplement les infos du site)
+        try {
+            await enrichMeta(meta, year);
+        } catch (e) {
+            console.error("TMDB:", e.message);
+        }
 
         // Strip undefined values for a clean payload.
         Object.keys(meta).forEach((k) => meta[k] === undefined && delete meta[k]);
