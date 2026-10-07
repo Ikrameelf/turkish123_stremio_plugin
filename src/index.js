@@ -5,6 +5,7 @@ const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const manifest = require("./manifest");
 const { getSeries, getMeta } = require("./catalog");
 const { getStream } = require("./stream");
+const { debugYoutube } = require("./util/youtube");
 
 const app = express();
 app.use(cors());
@@ -113,6 +114,11 @@ app.get("/proxy", async (req, res) => {
             if (!res.headersSent) res.status(500).send(e.message);
         }
     }
+});
+
+// Page de diagnostic YouTube : /debug/youtube/<slug>/<numéro d'épisode>
+app.get("/debug/youtube/:slug/:ep", async (req, res) => {
+    res.json(await debugYoutube(req.params.slug, req.params.ep));
 });
 
 const addonInterface = builder.getInterface();
