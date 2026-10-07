@@ -2,9 +2,8 @@ const { get } = require("./util/http");
 const { cached } = require("./util/cache");
 const { ID_PREFIX, BASE_URL } = require("./catalog");
 const { parseEpisodeSources, extract } = require("./extractors");
+const { getYoutubeStreams } = require("./util/youtube");
 
-// The absolute origin of THIS addon, used to wrap HLS streams through /proxy.
-// On Render, RENDER_EXTERNAL_URL is set to the public URL; locally we fall back.
 function addonOrigin() {
     return (
         process.env.RENDER_EXTERNAL_URL ||
@@ -12,9 +11,6 @@ function addonOrigin() {
     );
 }
 
-// Wrap a stream URL + referer through our /proxy route. HLS playlists need this
-// so the player sends the correct Referer to the CDN and so segment URLs are
-// rewritten to stay proxied.
 function proxyUrl(target, referer) {
     const origin = addonOrigin();
     const params = new URLSearchParams();
@@ -24,35 +20,37 @@ function proxyUrl(target, referer) {
 }
 
 /**
- * Stream handler. id format: "turkish123:<slug>:<absEpisode>".
- *
- * Fetches the episode page, parses the Server 1/2/3 download links, runs every
- * available extractor (all in parallel), and returns one Stremio stream per
- * resolved URL. tokvoy (engifuosi) is the reliable primary; voe/vidmoly are
- * best-effort extras.
+ * id format: "turkish123:<slug>:<absEpisode>".
+ * Retourne les flux turkish123 + les flux YouTube officiels.
+ * Chaque source échoue indépendamment de l'autre.
  */
 async function getStream(type, id) {
     const parts = id.split(":");
     if (parts.length < 3) return { streams: [] };
     const slug = parts[1];
-    const absEpisode = parts.slice(2).join(":"); // absolute episode number
+    const absEpisode = parts.slice(2).join(":");
     if (!slug || !/^\d+$/.test(absEpisode)) return { streams: [] };
 
-    // Cache successful stream results for ~10 min. The tokvoy signed URLs are
-    // IP-bound and valid 12 min, so a cached result is still playable shortly.
-    // This makes Stremio's "select stream"→"play" two-step resilient to tokvoy's
-    // per-IP rate limits (the second click reuses the first extraction).
-    // Only cache non-empty results, so a rate-limited failure can be retried.
-    return cached(
-        `streams:${slug}:${absEpisode}`,
-        10 * 60 * 1000,
-        () => resolveStreams(slug, absEpisode),
-        (result) => result && result.streams && result.streams.length > 0
-    );
+    const [t123, youtube] = await Promise.all([
+        cached(
+            `streams:${slug}:${absEpisode}`,
+            10 * 60 * 1000,
+            () => resolveStreams(slug, absEpisode),
+            (result) => result && result.streams && result.streams.length > 0
+        ).catch((e) => {
+            console.error("turkish123:", e.message);
+            return { streams: [] };
+        }),
+        getYoutubeStreams(slug, absEpisode).catch((e) => {
+            console.error("YouTube:", e.message);
+            return [];
+        })
+    ]);
+
+    return { streams: [...(t123.streams || []), ...youtube] };
 }
 
 async function resolveStreams(slug, absEpisode) {
-    // Fetch the episode page (cached briefly so repeated stream clicks are fast).
     const episodeUrl = `${BASE_URL}/${slug}-episode-${absEpisode}/`;
     const html = await cached(
         `episode:${slug}:${absEpisode}`,
@@ -63,7 +61,6 @@ async function resolveStreams(slug, absEpisode) {
     const sources = parseEpisodeSources(html);
     if (!sources.length) return { streams: [] };
 
-    // Run all extractors in parallel; collect whatever resolves.
     const settled = await Promise.allSettled(
         sources.map(async (s) => ({ source: s, streams: await extract(s) }))
     );
@@ -79,7 +76,6 @@ async function resolveStreams(slug, absEpisode) {
             const hostLabel = hostLabelFor(source.host);
 
             if (isHls) {
-                // HLS needs the proxy for referer + playlist rewriting.
                 streams.push({
                     name: `${hostLabel} ${ex.quality || ""}`.trim(),
                     title: `Source ${index}: ${hostLabel} (${ex.quality || "HLS"})`,
@@ -90,8 +86,6 @@ async function resolveStreams(slug, absEpisode) {
                     }
                 });
             } else {
-                // Direct progressive .mp4. Send the raw CDN URL with proxyHeaders
-                // so Stremio injects the Referer the CDN checks.
                 streams.push({
                     name: `${hostLabel} ${ex.quality || ""}`.trim(),
                     title: `Source ${index}: ${hostLabel} (${ex.quality || "MP4"})`,
@@ -106,10 +100,6 @@ async function resolveStreams(slug, absEpisode) {
             }
         }
     }
-
-    // Returning an empty array (rather than a placeholder URL) lets Stremio
-    // show "no streams available" cleanly. A fake URL like "about:blank" crashes
-    // TV players (ExoPlayer chokes on the non-http protocol).
 
     return { streams };
 }
