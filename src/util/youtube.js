@@ -7,7 +7,8 @@ const API = "https://www.googleapis.com/youtube/v3";
 const KEY = process.env.YOUTUBE_API_KEY;
 const TTL = 12 * 60 * 60 * 1000; // 12 h (une recherche coûte 100 unités de quota)
 
-// Chaînes officielles toujours acceptées, en plus de celles trouvées via TMDB.
+// Chaînes officielles toujours acceptées, en plus de celles trouvées via TMDB
+// et de la chaîne portant le nom de la série.
 // Tu peux en ajouter dans Render : YOUTUBE_EXTRA_CHANNELS="Nom 1,Nom 2"
 const DEFAULT_CHANNELS = [
     "show tv", "star tv", "atv", "kanal d", "trt 1", "trt",
@@ -82,7 +83,15 @@ async function prepare(slug, absEpisode) {
 
     const extra = (process.env.YOUTUBE_EXTRA_CHANNELS || "")
         .split(",").map((s) => s.trim()).filter(Boolean);
-    const officialNames = [...DEFAULT_CHANNELS, ...(info?.companies || []), ...extra];
+
+    // La chaîne qui porte le nom de la série compte aussi comme officielle
+    const officialNames = [
+        ...DEFAULT_CHANNELS,
+        ...(info?.companies || []),
+        ...extra,
+        originalName,
+        cleanSite
+    ];
 
     const wanted = parseInt(absEpisode, 10);
     const q = `${originalName} ${wanted}. Bölüm`;
