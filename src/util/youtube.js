@@ -24,6 +24,11 @@ const norm = (s) =>
         .replace(/[^a-z0-9]+/g, " ")
         .trim();
 
+// Nom de chaîne "compact" : sans espaces, sans "official"/"resmi"
+// ("Kanal D" et "KanalD" donnent tous les deux "kanald")
+const compact = (s) =>
+    norm(s).replace(/\b(official|resmi)\b/g, "").replace(/ /g, "");
+
 function decode(s) {
     return (s || "")
         .replace(/&amp;/g, "&")
@@ -53,10 +58,17 @@ function episodeNumber(title) {
     return null;
 }
 
-// La chaîne est-elle dans la liste officielle ? (comparaison par mots entiers)
+// La chaîne est-elle dans la liste officielle ?
 function isOfficial(channelTitle, names) {
-    const c = ` ${norm(channelTitle)} `;
-    return names.some((n) => n && c.includes(` ${norm(n)} `));
+    const c = compact(channelTitle);
+    if (!c) return false;
+    return names.some((n) => compact(n) === c);
+}
+
+// Le titre est-il exactement "<Série> <N>. Bölüm" (épisode complet) ?
+function isExactTitle(title, keys, wanted) {
+    const t = norm(title);
+    return keys.some((k) => t === `${k} ${wanted} bolum`);
 }
 
 // Prépare la requête : nom original (TMDB), chaînes officielles, texte cherché
@@ -94,21 +106,24 @@ async function getYoutubeStreams(slug, absEpisode) {
         (results.map((v) => `${v.channel} | ${v.title}`).join("\n") || "(aucun résultat)")
     );
 
-    return results
-        .filter((v) => {
-            if (!v.id) return false;
-            const t = norm(v.title);
-            if (/fragman|trailer|teaser|promo|ozet|best of/.test(t)) return false;
-            if (!p.keys.some((k) => t.includes(k))) return false;
-            if (episodeNumber(v.title) !== p.wanted) return false;
-            return isOfficial(v.channel, p.officialNames);
-        })
-        .slice(0, 2)
-        .map((v) => ({
-            name: "YouTube",
-            title: `▶ YouTube officiel\n${v.title}\n(${v.channel})`,
-            ytId: v.id
-        }));
+    const candidates = results.filter((v) => {
+        if (!v.id) return false;
+        const t = norm(v.title);
+        if (/fragman|trailer|teaser|promo|ozet|best of/.test(t)) return false;
+        if (!p.keys.some((k) => t.includes(k))) return false;
+        if (episodeNumber(v.title) !== p.wanted) return false;
+        return isOfficial(v.channel, p.officialNames);
+    });
+
+    // Épisodes complets (titre exact) d'abord ; extraits seulement s'il n'y en a pas
+    const full = candidates.filter((v) => isExactTitle(v.title, p.keys, p.wanted));
+    const chosen = full.length ? full : candidates;
+
+    return chosen.slice(0, 2).map((v) => ({
+        name: "YouTube",
+        title: `▶ YouTube officiel\n${v.title}\n(${v.channel})`,
+        ytId: v.id
+    }));
 }
 
 // Diagnostic : affiche tout ce qui se passe, vidéo par vidéo
@@ -133,7 +148,8 @@ async function debugYoutube(slug, absEpisode) {
                 title: v.title,
                 seriesNameInTitle: p.keys.some((k) => t.includes(k)),
                 episodeNumberFound: episodeNumber(v.title),
-                officialChannel: isOfficial(v.channel, p.officialNames)
+                officialChannel: isOfficial(v.channel, p.officialNames),
+                exactTitle: isExactTitle(v.title, p.keys, p.wanted)
             };
         });
     } catch (e) {
