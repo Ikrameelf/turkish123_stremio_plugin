@@ -60,7 +60,10 @@ function isOfficial(channelTitle, names) {
 }
 
 async function getYoutubeStreams(slug, absEpisode) {
-    if (!KEY) return [];
+    if (!KEY) {
+        console.log("YouTube: YOUTUBE_API_KEY manquante");
+        return [];
+    }
 
     const list = await fetchSeriesList().catch(() => []);
     const siteName = list.find((s) => s.slug === slug)?.name || slug.replace(/-/g, " ");
@@ -76,6 +79,13 @@ async function getYoutubeStreams(slug, absEpisode) {
     const wanted = parseInt(absEpisode, 10);
     const q = `${originalName} ${wanted}. Bölüm`;
     const results = await cached(`yt-search:${q}`, TTL, () => search(q));
+
+    // --- Logs de diagnostic ---
+    console.log("YT query:", q, "| officiel:", officialNames.join(", "));
+    console.log(
+        "YT results:\n" +
+        (results.map((v) => `${v.channel} | ${v.title}`).join("\n") || "(aucun résultat)")
+    );
 
     const keys = [norm(originalName), norm(cleanSite)].filter(Boolean);
 
