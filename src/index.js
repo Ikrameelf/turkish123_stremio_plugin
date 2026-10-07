@@ -133,6 +133,42 @@ app.get("/debug/streams/:slug/:ep", async (req, res) => {
     res.json(out);
 });
 
+// Diagnostic 3 : teste uniquement turkish123
+// /debug/t123/<slug>/<numéro d'épisode>
+app.get("/debug/t123/:slug/:ep", async (req, res) => {
+    const out = {};
+    try {
+        const { get } = require("./util/http");
+        const { BASE_URL } = require("./catalog");
+        const { parseEpisodeSources, extract } = require("./extractors");
+
+        const url = `${BASE_URL}/${req.params.slug}-episode-${req.params.ep}/`;
+        out.url = url;
+
+        const html = await get(url);
+        out.htmlLength = html.length;
+
+        const sources = parseEpisodeSources(html);
+        out.sourcesFound = sources.length;
+        out.sources = sources;
+
+        out.extract = [];
+        for (const s of sources) {
+            try {
+                const r = await extract(s);
+                out.extract.push({ host: s.host, streamsFound: r.length });
+            } catch (e) {
+                out.extract.push({ host: s.host, error: e.message });
+            }
+        }
+    } catch (e) {
+        out.error = e.response && e.response.status
+            ? "HTTP " + e.response.status
+            : e.message;
+    }
+    res.json(out);
+});
+
 const addonInterface = builder.getInterface();
 const addonRouter = getRouter(addonInterface);
 app.use("/", addonRouter);
