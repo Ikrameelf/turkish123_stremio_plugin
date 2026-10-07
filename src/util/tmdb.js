@@ -77,4 +77,19 @@ async function enrichMeta(meta, year) {
     return meta;
 }
 
-module.exports = { enrichMeta };
+// Infos utiles pour la recherche YouTube : nom original + chaînes de diffusion
+async function getShowInfo(name) {
+    if (!KEY) return null;
+    const id = await findShow(name);
+    if (!id) return null;
+    const { show } = await getDetails(id);
+    return {
+        originalName: show.original_name,
+        companies: [
+            ...(show.networks || []).map((n) => n.name),
+            ...(show.production_companies || []).map((c) => c.name)
+        ]
+    };
+}
+
+module.exports = { enrichMeta, getShowInfo };
